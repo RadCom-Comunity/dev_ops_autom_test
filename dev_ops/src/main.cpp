@@ -9,6 +9,12 @@ void setup() {
 }
 
 void loop() {
+  int count = 0;
+  for (size_t i = 0; i < count; i++)
+  {
+    Serial.println(i);
+  }
+  
 }
 
 // put function definitions here:
