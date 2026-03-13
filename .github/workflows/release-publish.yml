@@ -1,0 +1,114 @@
+name: 🚀 Release - Publicar Binário
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: "Tag de versão (ex: v1.2.3)"
+        required: true
+        type: string
+
+jobs:
+  build-and-release:
+    name: Build + Gerar Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: ⚡ Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
+
+      - name: 📦 Instalar PlatformIO
+        run: pip install platformio
+
+      - name: 🔨 Build Release
+        run: pio run
+
+      # ─── Gerar changelog automático desde a última tag ───────────────────────
+      - name: 📝 Gerar Changelog
+        id: changelog
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%an)" | head -20)
+          else
+            COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%an)")
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # ─── Renomear binários com nome do repo + versão ──────────────────────────
+      - name: 🏷️ Preparar artefatos
+        id: artifacts
+        run: |
+          REPO_NAME="${{ github.event.repository.name }}"
+          VERSION="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version_tag }}"
+          fi
+          mkdir -p release_files
+          find .pio/build -name "*.bin" -o -name "*.hex" -o -name "*.elf" | while read f; do
+            ENV=$(echo $f | cut -d'/' -f3)
+            EXT="${f##*.}"
+            cp "$f" "release_files/${REPO_NAME}_${VERSION}_${ENV}.${EXT}"
+          done
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          ls release_files/
+
+      # ─── Criar GitHub Release ─────────────────────────────────────────────────
+      - name: 🎉 Criar GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.artifacts.outputs.version }}
+          name: "Release ${{ steps.artifacts.outputs.version }} - ${{ github.event.repository.name }}"
+          body: |
+            ## 🔧 ${{ github.event.repository.name }} — ${{ steps.artifacts.outputs.version }}
+
+            **Branch:** `${{ github.ref_name }}`
+            **Build:** ${{ github.run_number }}
+            **Data:** ${{ github.event.head_commit.timestamp }}
+
+            ---
+
+            ### 📋 Commits nesta versão
+            ${{ steps.changelog.outputs.changelog }}
+
+            ---
+
+            ### 📁 Arquivos
+            Os binários estão nos anexos abaixo. Faça download do `.bin` ou `.hex` correspondente ao seu ambiente.
+          files: release_files/*
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─── Copiar para pasta de rede (Dropbox / Pasta compartilhada) ────────────
+      # Para usar: configure o secret NETWORK_SHARE_PATH no repositório
+      # Exemplo de valor: \\servidor\firmwares  ou  /mnt/dropbox/firmwares
+      - name: 📂 Copiar para pasta de rede
+        if: ${{ vars.NETWORK_SHARE_ENABLED == 'true' }}
+        run: |
+          DEST="${{ vars.NETWORK_SHARE_PATH }}/${{ github.event.repository.name }}/${{ steps.artifacts.outputs.version }}"
+          mkdir -p "$DEST"
+          cp release_files/* "$DEST/"
+          echo "✅ Binários copiados para $DEST"
+        # NOTA: Em runners self-hosted com acesso à rede, isso funciona nativamente.
+        # Em runners GitHub-hosted, use o step de upload via rsync ou smb abaixo.

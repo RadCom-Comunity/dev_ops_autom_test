@@ -1,0 +1,83 @@
+name: 📝 Documentação - Gerar CHANGELOG
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  generate-changelog:
+    name: Atualizar CHANGELOG.md
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📝 Gerar CHANGELOG automático
+        id: changelog
+        run: |
+          echo "# 📋 CHANGELOG — ${{ github.event.repository.name }}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "> Gerado automaticamente a partir dos commits. Última atualização: $(date '+%d/%m/%Y %H:%M')" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+          # Lista todas as tags em ordem decrescente
+          TAGS=$(git tag --sort=-version:refname | head -20)
+
+          if [ -z "$TAGS" ]; then
+            echo "## 🚧 Sem versão definida" >> CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            git log --pretty=format:"- **%s** — *%an* \`%h\` (%ad)" --date=format:'%d/%m/%Y' | head -30 >> CHANGELOG.md
+          else
+            PREV_TAG=""
+            for TAG in $TAGS; do
+              DATE=$(git log -1 --format="%ad" --date=format:'%d/%m/%Y' $TAG)
+              echo "## 🏷️ $TAG — $DATE" >> CHANGELOG.md
+              echo "" >> CHANGELOG.md
+
+              if [ -z "$PREV_TAG" ]; then
+                # Commits desde a última tag até HEAD
+                RANGE="$TAG..HEAD"
+                if git log $RANGE --oneline 2>/dev/null | grep -q .; then
+                  echo "### Unreleased" >> CHANGELOG.md
+                  git log $RANGE --pretty=format:"- **%s** — *%an* \`%h\`" >> CHANGELOG.md
+                  echo "" >> CHANGELOG.md
+                fi
+                RANGE="$TAG"
+              else
+                RANGE="${TAG}..${PREV_TAG}"
+              fi
+
+              # Agrupa por tipo de commit (feat, fix, refactor, etc.)
+              FEATS=$(git log $RANGE --pretty=format:"- %s — *%an* \`%h\`" --grep="^feat" 2>/dev/null)
+              FIXES=$(git log $RANGE --pretty=format:"- %s — *%an* \`%h\`" --grep="^fix" 2>/dev/null)
+              REFACTORS=$(git log $RANGE --pretty=format:"- %s — *%an* \`%h\`" --grep="^refactor" 2>/dev/null)
+              DOCS=$(git log $RANGE --pretty=format:"- %s — *%an* \`%h\`" --grep="^docs" 2>/dev/null)
+              OTHERS=$(git log $RANGE --pretty=format:"- %s — *%an* \`%h\`" 2>/dev/null | grep -v "^- feat\|^- fix\|^- refactor\|^- docs\|^- chore" | head -20)
+
+              [ -n "$FEATS" ]     && echo "### ✨ Novas funcionalidades" >> CHANGELOG.md && echo "$FEATS" >> CHANGELOG.md && echo "" >> CHANGELOG.md
+              [ -n "$FIXES" ]     && echo "### 🐛 Correções" >> CHANGELOG.md && echo "$FIXES" >> CHANGELOG.md && echo "" >> CHANGELOG.md
+              [ -n "$REFACTORS" ] && echo "### ♻️ Refatorações" >> CHANGELOG.md && echo "$REFACTORS" >> CHANGELOG.md && echo "" >> CHANGELOG.md
+              [ -n "$DOCS" ]      && echo "### 📖 Documentação" >> CHANGELOG.md && echo "$DOCS" >> CHANGELOG.md && echo "" >> CHANGELOG.md
+              [ -n "$OTHERS" ]    && echo "### 🔧 Outros" >> CHANGELOG.md && echo "$OTHERS" >> CHANGELOG.md && echo "" >> CHANGELOG.md
+
+              PREV_TAG=$TAG
+            done
+          fi
+
+      - name: 💾 Commit do CHANGELOG atualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git diff --cached --quiet || git commit -m "docs: atualiza CHANGELOG automaticamente [skip ci]"
+          git push

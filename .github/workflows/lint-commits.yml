@@ -1,0 +1,73 @@
+name: 🔍 Validar Mensagem de Commit
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+
+jobs:
+  lint-commits:
+    name: Verificar convenção de commits
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔍 Validar commits do PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            // Padrão: tipo(escopo opcional): descrição
+            // Tipos permitidos
+            const validTypes = ['feat', 'fix', 'refactor', 'docs', 'chore', 'test', 'perf', 'ci', 'style', 'revert'];
+            const pattern = new RegExp(`^(${validTypes.join('|')})(\\(.+\\))?: .{3,}`, 'i');
+
+            const invalid = commits
+              .map(c => c.commit.message.split('\n')[0])
+              .filter(msg => !pattern.test(msg) && !msg.startsWith('Merge'));
+
+            if (invalid.length > 0) {
+              const examples = [
+                '`feat: adiciona leitura de temperatura via I2C`',
+                '`fix: corrige overflow no buffer UART`',
+                '`refactor(sensor): simplifica lógica de calibração`',
+                '`docs: atualiza README com pinagem do módulo`',
+              ].join('\n');
+
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## ⚠️ Mensagens de commit fora do padrão
+
+            Os seguintes commits não seguem a convenção **Conventional Commits**:
+
+            ${invalid.map(m => `- \`${m}\``).join('\n')}
+
+            ### ✅ Formato esperado
+            \`\`\`
+            tipo(escopo): descrição curta
+            \`\`\`
+
+            **Tipos válidos:** \`feat\`, \`fix\`, \`refactor\`, \`docs\`, \`chore\`, \`test\`, \`perf\`, \`ci\`
+
+            ### 📌 Exemplos
+            ${examples}
+
+            > Corrija as mensagens com \`git commit --amend\` ou \`git rebase -i\` e dê \`git push --force\`.`
+              });
+
+              core.setFailed(`${invalid.length} commit(s) com mensagem fora do padrão.`);
+            } else {
+              console.log('✅ Todos os commits seguem o padrão Conventional Commits.');
+            }

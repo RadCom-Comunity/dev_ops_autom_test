@@ -1,0 +1,66 @@
+name: 🔨 CI - Verificação de Build
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+  push:
+    branches:
+      - dev
+
+jobs:
+  build-check:
+    name: Compilar com PlatformIO
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: 🐍 Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: ⚡ Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-
+
+      - name: 📦 Instalar PlatformIO
+        run: pip install platformio
+
+      - name: 🔨 Build
+        run: pio run
+
+      - name: 📊 Relatório de tamanho do binário
+        if: success()
+        run: pio run --target size
+
+      - name: ✅ Build OK - Comentar no PR
+        if: success() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ **Build passou com sucesso!** O código compila corretamente no PlatformIO. Pode ser aprovado para merge.'
+            })
+
+      - name: ❌ Build FALHOU - Comentar no PR
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ **Build falhou!** Corrija os erros de compilação antes de fazer merge. Verifique a aba *Actions* para detalhes.'
+            })

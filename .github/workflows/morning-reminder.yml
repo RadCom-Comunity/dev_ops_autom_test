@@ -1,0 +1,99 @@
+name: 🌅 Lembrete Matinal - Sincronizar dev
+
+on:
+  schedule:
+    # Roda às 08:00 horário de Brasília (11:00 UTC) em dias úteis
+    - cron: "0 11 * * 1-5"
+  workflow_dispatch: # Permite rodar manualmente também
+
+jobs:
+  morning-reminder:
+    name: Notificar devs para puxar dev
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ─── Verificar se houve commits na dev desde ontem ───────────────────────
+      - name: 🔍 Verificar commits recentes na dev
+        id: check_commits
+        run: |
+          SINCE=$(date -d "yesterday" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -v-1d +%Y-%m-%dT%H:%M:%SZ)
+          COUNT=$(git log origin/dev --since="$SINCE" --oneline 2>/dev/null | wc -l || echo "0")
+          echo "commit_count=$COUNT" >> $GITHUB_OUTPUT
+          LAST_COMMITS=$(git log origin/dev --since="$SINCE" --pretty=format:"• \`%h\` %s — *%an*" 2>/dev/null | head -10 || echo "Nenhum commit recente")
+          echo "last_commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$LAST_COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # ─── Criar Issue de lembrete diário ──────────────────────────────────────
+      - name: 📌 Criar Issue de lembrete
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const today = new Date().toLocaleDateString('pt-BR', {
+              weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+              timeZone: 'America/Sao_Paulo'
+            });
+            const commitCount = '${{ steps.check_commits.outputs.commit_count }}';
+            const lastCommits = `${{ steps.check_commits.outputs.last_commits }}`;
+
+            const statusMsg = commitCount > 0
+              ? `⚠️ **${commitCount} commit(s) novo(s)** na \`dev\` desde ontem. Sincronize antes de começar!`
+              : `✅ Nenhum commit novo na \`dev\` desde ontem. Branch está atualizada.`;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🌅 [${today}] — Sincronize sua branch antes de começar`,
+              body: `## Bom dia, time! ☕
+
+            ${statusMsg}
+
+            ### 📋 Commits recentes na \`dev\`
+            ${lastCommits || 'Nenhum commit recente.'}
+
+            ---
+
+            ### ✅ Checklist de início do dia
+
+            - [ ] \`git fetch origin\`
+            - [ ] \`git checkout dev && git pull origin dev\`
+            - [ ] Criar branch pessoal: \`git checkout -b feature/sua-tarefa\`
+            - [ ] Verificar se o projeto compila: \`pio run\`
+
+            ---
+
+            > 💡 **Dica:** Sincronize sempre antes de criar uma branch nova para evitar conflitos e retrabalho.
+            > Esta issue é fechada automaticamente ao final do dia.`,
+              labels: ['lembrete-diario', 'sync-dev']
+            });
+
+      # ─── Fechar issues de lembrete do dia anterior ───────────────────────────
+      - name: 🗑️ Fechar lembretes antigos
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'lembrete-diario',
+              state: 'open',
+              per_page: 20
+            });
+
+            const today = new Date().toDateString();
+            for (const issue of issues.data) {
+              const issueDate = new Date(issue.created_at).toDateString();
+              if (issueDate !== today) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed'
+                });
+              }
+            }
