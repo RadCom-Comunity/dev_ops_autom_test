@@ -13,6 +13,7 @@ void loop() {
   for (size_t i = 0; i < count; i++)
   {
     Serial.println(i);
+    //adição de comentario
   }
   
 }
